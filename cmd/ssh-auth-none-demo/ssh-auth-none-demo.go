@@ -28,8 +28,8 @@ import (
 	"path/filepath"
 	"time"
 
+	ssh "github.com/tailscale/gliderssh"
 	gossh "golang.org/x/crypto/ssh"
-	"tailscale.com/tempfork/gliderlabs/ssh"
 )
 
 // keyTypes are the SSH key types that we either try to read from the

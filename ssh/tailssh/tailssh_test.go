@@ -33,6 +33,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	gliderssh "github.com/tailscale/gliderssh"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"tailscale.com/cmd/testwrapper/flakytest"
@@ -42,7 +43,6 @@ import (
 	"tailscale.com/net/tsdial"
 	"tailscale.com/sessionrecording"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tempfork/gliderlabs/ssh"
 	testssh "tailscale.com/tempfork/sshtest/ssh"
 	"tailscale.com/tsd"
 	"tailscale.com/tstest"
@@ -1094,7 +1094,7 @@ func TestSSH(t *testing.T) {
 	sc.finalAction = sc.action0
 	sc.authCompleted.Store(true)
 
-	sc.Handler = func(s ssh.Session) {
+	sc.Handler = func(s gliderssh.Session) {
 		sc.newSSHSession(s).run()
 	}
 
