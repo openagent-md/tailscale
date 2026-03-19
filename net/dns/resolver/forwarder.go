@@ -739,6 +739,17 @@ type truncatedResponseError struct {
 
 func (tr truncatedResponseError) Error() string { return "response truncated" }
 
+// refusedResponseError is returned when an upstream DNS server responds with
+// REFUSED. The response bytes are preserved so they can be returned to the
+// client if all upstream servers refuse the query.
+type refusedResponseError struct {
+	res []byte
+}
+
+func (r refusedResponseError) Error() string { return errRefused.Error() }
+func (r refusedResponseError) Unwrap() error { return errRefused }
+
+var errRefused = errors.New("response code indicates refusal")
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
 
@@ -812,10 +823,16 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	rcode := getRCode(out)
 
 	// don't forward transient errors back to the client when the server fails
-	if rcode == dns.RCodeServerFailure {
-		f.logf("recv: response code indicating server failure: %d", rcode)
+	switch rcode {
+	case dns.RCodeServerFailure:
+		f.logf("sendUDP: response code indicating server failure: %d", rcode)
 		metricDNSFwdUDPErrorServer.Add(1)
 		return nil, errServerFailure
+	case dns.RCodeRefused:
+		// treat REFUSED as a soft error so other resolvers in the race can respond
+		f.logf("sendUDP: response code indicating refusal: %d", rcode)
+		metricDNSFwdUDPErrorRefused.Add(1)
+		return nil, refusedResponseError{out}
 	}
 
 	// Set the truncated bit if buffer was truncated during read and the flag isn't already set
@@ -951,10 +968,16 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	rcode := getRCode(out)
 
 	// don't forward transient errors back to the client when the server fails
-	if rcode == dns.RCodeServerFailure {
+	switch rcode {
+	case dns.RCodeServerFailure:
 		f.logf("sendTCP: response code indicating server failure: %d", rcode)
 		metricDNSFwdTCPErrorServer.Add(1)
 		return nil, errServerFailure
+	case dns.RCodeRefused:
+		// treat REFUSED as a soft error so other resolvers in the race can respond
+		f.logf("sendTCP: response code indicating refusal: %d", rcode)
+		metricDNSFwdTCPErrorRefused.Add(1)
+		return nil, refusedResponseError{out}
 	}
 
 	// TODO(andrew): do we need to do this?
@@ -1128,6 +1151,7 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 
 	var firstErr error
 	var numErr int
+	var sawNonRefused bool
 	for {
 		select {
 		case v := <-resc:
@@ -1147,32 +1171,47 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			if firstErr == nil {
 				firstErr = err
 			}
+			if !errors.Is(err, errRefused) {
+				sawNonRefused = true
+			}
 			numErr++
 			if numErr == len(resolvers) {
-				if errors.Is(firstErr, errServerFailure) {
-					res, err := servfailResponse(query)
+				var res packet
+				if sawNonRefused {
+					// At least one server failed with something other than REFUSED;
+					// return SERVFAIL regardless of what firstErr is.
+					r, err := servfailResponse(query)
 					if err != nil {
 						f.logf("building servfail response: %v", err)
 						return firstErr
 					}
-
-					select {
-					case <-ctx.Done():
-						metricDNSFwdErrorContext.Add(1)
-						metricDNSFwdErrorContextGotError.Add(1)
-						var resolverAddrs []string
-						for _, rr := range resolvers {
-							resolverAddrs = append(resolverAddrs, rr.name.Addr)
-						}
-						if f.acceptDNS {
-							f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
-						}
-					case responseChan <- res:
-						if f.verboseFwd {
-							f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
-						}
-						return nil
+					res = r
+				} else {
+					// !sawNonRefused means every error was a refusedResponseError,
+					// so firstErr is guaranteed to wrap one.
+					refErr, ok := errors.AsType[refusedResponseError](firstErr)
+					if !ok {
+						f.logf("unexpected: all errors were REFUSED but firstErr is not refusedResponseError: %v", firstErr)
+						return firstErr
 					}
+					res = packet{refErr.res, query.family, query.addr}
+				}
+				select {
+				case <-ctx.Done():
+					metricDNSFwdErrorContext.Add(1)
+					metricDNSFwdErrorContextGotError.Add(1)
+					var resolverAddrs []string
+					for _, rr := range resolvers {
+						resolverAddrs = append(resolverAddrs, rr.name.Addr)
+					}
+					if f.acceptDNS {
+						f.health.SetUnhealthy(dnsForwarderFailing, health.Args{health.ArgDNSServers: strings.Join(resolverAddrs, ",")})
+					}
+				case responseChan <- res:
+					if f.verboseFwd {
+						f.logf("forwarder response(%d, %v, %d) = %d, %v", fq.txid, typ, len(domain), len(res.bs), firstErr)
+					}
+					return nil
 				}
 				return firstErr
 			}
