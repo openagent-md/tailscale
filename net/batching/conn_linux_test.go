@@ -140,8 +140,6 @@ func Test_linuxBatchingConn_splitCoalescedMessages(t *testing.T) {
 }
 
 func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
-	c := &linuxBatchingConn{}
-
 	withGeneveSpace := func(len, cap int) []byte {
 		return make([]byte, len+packet.GeneveFixedHeaderLength, cap+packet.GeneveFixedHeaderLength)
 	}
@@ -151,12 +149,17 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 	}
 	geneve.VNI.Set(1)
 
+	allCfs := []coalesceMessagesFunc{
+		coalesceMessagesUserspace,
+		coalesceMessagesKernel,
+	}
 	cases := []struct {
 		name     string
 		buffs    [][]byte
 		geneve   packet.GeneveHeader
 		wantLens []int
 		wantGSO  []int
+		cf       []coalesceMessagesFunc
 	}{
 		{
 			name: "one message no coalesce",
@@ -165,6 +168,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{1},
 			wantGSO:  []int{0},
+			cf:       allCfs,
 		},
 		{
 			name: "one message no coalesce vni.isSet",
@@ -174,6 +178,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			geneve:   geneve,
 			wantLens: []int{1 + packet.GeneveFixedHeaderLength},
 			wantGSO:  []int{0},
+			cf:       allCfs,
 		},
 		{
 			name: "two messages equal len coalesce",
@@ -183,6 +188,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{2},
 			wantGSO:  []int{1},
+			cf:       allCfs,
 		},
 		{
 			name: "two messages equal len coalesce vni.isSet",
@@ -193,6 +199,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			geneve:   geneve,
 			wantLens: []int{2 + (2 * packet.GeneveFixedHeaderLength)},
 			wantGSO:  []int{1 + packet.GeneveFixedHeaderLength},
+			cf:       allCfs,
 		},
 		{
 			name: "two messages unequal len coalesce",
@@ -202,6 +209,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{3},
 			wantGSO:  []int{2},
+			cf:       allCfs,
 		},
 		{
 			name: "two messages unequal len coalesce vni.isSet",
@@ -212,6 +220,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			geneve:   geneve,
 			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength)},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
+			cf:       allCfs,
 		},
 		{
 			name: "three messages second unequal len coalesce",
@@ -222,6 +231,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{3, 2},
 			wantGSO:  []int{2, 0},
+			cf:       allCfs,
 		},
 		{
 			name: "three messages second unequal len coalesce vni.isSet",
@@ -233,6 +243,7 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			geneve:   geneve,
 			wantLens: []int{3 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
 			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
+			cf:       allCfs,
 		},
 		{
 			name: "three messages limited cap coalesce",
@@ -243,17 +254,30 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 			},
 			wantLens: []int{4, 2},
 			wantGSO:  []int{2, 0},
+			cf:       []coalesceMessagesFunc{coalesceMessagesUserspace},
 		},
 		{
-			name: "three messages limited cap coalesce vni.isSet",
+			name: "three messages limited cap coalesce - vectored",
+			buffs: [][]byte{
+				withGeneveSpace(2, 4),
+				withGeneveSpace(2, 2),
+				withGeneveSpace(2, 2),
+			},
+			wantLens: []int{6},
+			wantGSO:  []int{2},
+			cf:       []coalesceMessagesFunc{coalesceMessagesKernel},
+		},
+		{
+			name: "three messages limited cap coalesce vni.isSet - vectored",
 			buffs: [][]byte{
 				withGeneveSpace(2, 4+packet.GeneveFixedHeaderLength),
 				withGeneveSpace(2, 2),
 				withGeneveSpace(2, 2),
 			},
 			geneve:   geneve,
-			wantLens: []int{4 + (2 * packet.GeneveFixedHeaderLength), 2 + packet.GeneveFixedHeaderLength},
-			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength, 0},
+			wantLens: []int{6 + (3 * packet.GeneveFixedHeaderLength)},
+			wantGSO:  []int{2 + packet.GeneveFixedHeaderLength},
+			cf:       []coalesceMessagesFunc{coalesceMessagesKernel},
 		},
 	}
 
@@ -268,33 +292,38 @@ func Test_linuxBatchingConn_coalesceMessages(t *testing.T) {
 				msgs[i].Buffers = make([][]byte, 1)
 				msgs[i].OOB = make([]byte, controlMessageSize)
 			}
-			got := c.coalesceMessages(addr, tt.geneve, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
-			if got != len(tt.wantLens) {
-				t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
-			}
-			for i := range got {
-				if msgs[i].Addr != addr {
-					t.Errorf("msgs[%d].Addr != passed addr", i)
+			for _, cf := range tt.cf {
+				got := cf(addr, tt.geneve, tt.buffs, msgs, packet.GeneveFixedHeaderLength)
+				if got != len(tt.wantLens) {
+					t.Fatalf("got len %d want: %d", got, len(tt.wantLens))
 				}
-				gotLen := len(msgs[i].Buffers[0])
-				if gotLen != tt.wantLens[i] {
-					t.Errorf("len(msgs[%d].Buffers[0]) %d != %d", i, gotLen, tt.wantLens[i])
-				}
-				// coalesceMessages calls setGSOSizeInControl, which uses a cmsg
-				// type of UDP_SEGMENT, and getGSOSizeInControl scans for a cmsg
-				// type of UDP_GRO. Therefore, we have to use the lower-level
-				// getDataFromControl in order to specify the cmsg type of
-				// interest for this test.
-				data, err := getDataFromControl(msgs[i].OOB, unix.SOL_UDP, unix.UDP_SEGMENT, 2)
-				if err != nil {
-					t.Fatalf("msgs[%d] getDataFromControl err: %v", i, err)
-				}
-				var gotGSO int
-				if len(data) >= 2 {
-					gotGSO = int(binary.NativeEndian.Uint16(data))
-				}
-				if gotGSO != tt.wantGSO[i] {
-					t.Errorf("msgs[%d] gsoSize %d != %d", i, gotGSO, tt.wantGSO[i])
+				for i := range got {
+					if msgs[i].Addr != addr {
+						t.Errorf("msgs[%d].Addr != passed addr", i)
+					}
+					var gotLen int
+					for j := range msgs[i].Buffers {
+						gotLen += len(msgs[i].Buffers[j])
+					}
+					if gotLen != tt.wantLens[i] {
+						t.Errorf("total length of msgs[%d].Buffers %d != %d", i, gotLen, tt.wantLens[i])
+					}
+					// coalesceMessages calls setGSOSizeInControl, which uses a cmsg
+					// type of UDP_SEGMENT, and getGSOSizeInControl scans for a cmsg
+					// type of UDP_GRO. Therefore, we have to use the lower-level
+					// getDataFromControl in order to specify the cmsg type of
+					// interest for this test.
+					data, err := getDataFromControl(msgs[i].OOB, unix.SOL_UDP, unix.UDP_SEGMENT, 2)
+					if err != nil {
+						t.Fatalf("msgs[%d] getDataFromControl err: %v", i, err)
+					}
+					var gotGSO int
+					if len(data) >= 2 {
+						gotGSO = int(binary.NativeEndian.Uint16(data))
+					}
+					if gotGSO != tt.wantGSO[i] {
+						t.Errorf("msgs[%d] gsoSize %d != %d", i, gotGSO, tt.wantGSO[i])
+					}
 				}
 			}
 		})

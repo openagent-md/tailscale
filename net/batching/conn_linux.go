@@ -20,11 +20,17 @@ import (
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
+	"tailscale.com/envknob"
 	"tailscale.com/hostinfo"
 	"tailscale.com/net/neterror"
 	"tailscale.com/net/packet"
 	"tailscale.com/types/nettype"
 	"tailscale.com/util/clientmetric"
+)
+
+var (
+	// disableVectoredWrites forces user-space coalescing during batched writes.
+	disableVectoredWrites = envknob.RegisterBool("TS_BATCHING_DISABLE_VECTORED_WRITES")
 )
 
 // xnetBatchReaderWriter defines the batching i/o methods of
@@ -49,6 +55,8 @@ var (
 	_ Conn = (*linuxBatchingConn)(nil)
 )
 
+type coalesceMessagesFunc func(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int
+
 // linuxBatchingConn is a UDP socket that provides batched i/o. It implements
 // [Conn].
 type linuxBatchingConn struct {
@@ -65,6 +73,8 @@ type linuxBatchingConn struct {
 	// unidiomatic to push this responsibility onto callers.
 	readOpMu     sync.Mutex
 	rxqOverflows uint32 // kernel pumps a cumulative counter, which we track to push a clientmetric delta value
+
+	coalesceMessages coalesceMessagesFunc
 }
 
 func (c *linuxBatchingConn) ReadFromUDPAddrPort(p []byte) (n int, addr netip.AddrPort, err error) {
@@ -96,13 +106,16 @@ const (
 	maxIPv6PayloadLen = 1<<16 - 1 - 8
 )
 
-// coalesceMessages iterates 'buffs', setting and coalescing them in 'msgs'
+// coalesceMessagesUserspace iterates 'buffs', setting and coalescing them in 'msgs'
 // where possible while maintaining datagram order.
+//
+// This version copies coalesced messages into a single write buffer, attempting to
+// fit data into remaining capacity. This may lead to aggregations smaller than 'maxPayloadLen'.
 //
 // All msgs have their Addr field set to addr.
 //
 // All msgs[i].Buffers[0] are preceded by a Geneve header (geneve) if geneve.VNI.IsSet().
-func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
+func coalesceMessagesUserspace(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
 	var (
 		base     = -1 // index of msg we are currently coalescing into
 		gsoSize  int  // segmentation size of msgs[base]
@@ -159,6 +172,74 @@ func (c *linuxBatchingConn) coalesceMessages(addr *net.UDPAddr, geneve packet.Ge
 	return base + 1
 }
 
+// coalesceMessagesKernel iterates 'buffs', setting and coalescing them in 'msgs'
+// where possible while maintaining datagram order.
+//
+// This version relies on net/x support for sendmmsg(2), sending a vector of buffers
+// in a single syscall. Buffers still represent a single datagram, and must present
+// correct headers at the top.
+//
+// All msgs have their Addr field set to addr.
+//
+// All msgs[i].Buffers[0] are preceded by a Geneve header (geneve) if geneve.VNI.IsSet().
+//
+// TODO(illotum) explore MSG_ZEROCOPY for large writes (>10KB).
+func coalesceMessagesKernel(addr *net.UDPAddr, geneve packet.GeneveHeader, buffs [][]byte, msgs []ipv6.Message, offset int) int {
+	var (
+		base         = -1 // index of msg we are currently coalescing into
+		gsoSize      int  // segmentation size of msgs[base]
+		dgramCnt     int  // number of dgrams coalesced into msgs[base]
+		endBatch     bool // tracking flag to start a new batch on next iteration of buffs
+		coalescedLen int  // bytes coalesced into msgs[base]
+	)
+	maxPayloadLen := maxIPv4PayloadLen
+	if addr.IP.To4() == nil {
+		maxPayloadLen = maxIPv6PayloadLen
+	}
+	vniIsSet := geneve.VNI.IsSet()
+	for i, buff := range buffs {
+		if vniIsSet {
+			geneve.Encode(buff)
+		} else {
+			buff = buff[offset:]
+		}
+		if i > 0 {
+			msgLen := len(buff)
+			if msgLen+coalescedLen <= maxPayloadLen &&
+				msgLen <= gsoSize &&
+				dgramCnt < udpSegmentMaxDatagrams &&
+				!endBatch {
+				msgs[base].Buffers = append(msgs[base].Buffers, buff)
+				if i == len(buffs)-1 {
+					setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
+				}
+				dgramCnt++
+				coalescedLen += msgLen
+				if msgLen < gsoSize {
+					// A smaller than gsoSize packet on the tail is legal, but
+					// it must end the batch.
+					endBatch = true
+				}
+				continue
+			}
+		}
+		if dgramCnt > 1 {
+			setGSOSizeInControl(&msgs[base].OOB, uint16(gsoSize))
+		}
+		// Reset prior to incrementing base since we are preparing to start a
+		// new potential batch.
+		endBatch = false
+		base++
+		gsoSize = len(buff)
+		msgs[base].OOB = msgs[base].OOB[:0]
+		msgs[base].Buffers[0] = buff
+		msgs[base].Addr = addr
+		dgramCnt = 1
+		coalescedLen = len(buff)
+	}
+	return base + 1
+}
+
 type sendBatch struct {
 	msgs []ipv6.Message
 	ua   *net.UDPAddr
@@ -171,7 +252,7 @@ func (c *linuxBatchingConn) getSendBatch() *sendBatch {
 
 func (c *linuxBatchingConn) putSendBatch(batch *sendBatch) {
 	for i := range batch.msgs {
-		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers, OOB: batch.msgs[i].OOB}
+		batch.msgs[i] = ipv6.Message{Buffers: batch.msgs[i].Buffers[:1], OOB: batch.msgs[i].OOB}
 	}
 	c.sendBatchPool.Put(batch)
 }
@@ -532,6 +613,7 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 				}
 			},
 		},
+		coalesceMessages: coalesceMessagesKernel,
 	}
 	switch network {
 	case "udp4":
@@ -551,6 +633,9 @@ func TryUpgradeToConn(pconn nettype.PacketConn, network string, batchSize int, r
 		// clientmetric instantiation internally, vs letting callers pass them
 		// to TryUpgradeToConn.
 		b.rxqOverflowsMetric = getRXQOverflowsMetric(rxqOverflowsMetricName)
+	}
+	if disableVectoredWrites() {
+		b.coalesceMessages = coalesceMessagesUserspace
 	}
 	return b
 }
