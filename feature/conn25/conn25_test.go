@@ -1360,20 +1360,20 @@ func TestConnectorPacketFilterAllow(t *testing.T) {
 	c.connector.transitIPs[knownSrc] = map[netip.Addr]appAddr{}
 	c.connector.transitIPs[knownSrc][knownTip] = appAddr{}
 
-	if allow, _ := c.connector.packetFilterAllow(&packet.Parsed{
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(knownSrc, 1234),
 		Dst: netip.AddrPortFrom(knownTip, 1234),
 	}); !allow {
 		t.Fatal("knownTip: should have been allowed")
 	}
 
-	if allow, _ := c.connector.packetFilterAllow(&packet.Parsed{
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(unknownSrc, 1234),
 		Dst: netip.AddrPortFrom(knownTip, 1234),
 	}); allow {
 		t.Fatal("unknownSrc: should not have been allowed")
 	}
-	if allow, _ := c.connector.packetFilterAllow(&packet.Parsed{
+	if allow, _ := c.connector.packetFilterAllow(packet.Parsed{
 		Src: netip.AddrPortFrom(knownSrc, 1234),
 		Dst: netip.AddrPortFrom(unknownTip, 1234),
 	}); allow {

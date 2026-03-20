@@ -890,7 +890,7 @@ const packetFilterAllowReason = "app connector transit IP"
 
 // packetFilterAllow returns true if the provided packet has a Src that maps to a peer
 // that has a transit IP with us that is the packet Dst, and false otherwise.
-func (c *connector) packetFilterAllow(p *packet.Parsed) (bool, string) {
+func (c *connector) packetFilterAllow(p packet.Parsed) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, ok := c.lookupBySrcIPAndTransitIP(p.Src.Addr(), p.Dst.Addr())
