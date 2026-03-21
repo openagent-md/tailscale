@@ -749,6 +749,16 @@ type refusedResponseError struct {
 func (r refusedResponseError) Error() string { return errRefused.Error() }
 func (r refusedResponseError) Unwrap() error { return errRefused }
 
+// servfailResponseError is returned when an upstream DNS server responds with
+// SERVFAIL. The response bytes are preserved so they can be returned to the
+// client when available, rather than synthesizing a new SERVFAIL response.
+type servfailResponseError struct {
+	res []byte
+}
+
+func (r servfailResponseError) Error() string { return errServerFailure.Error() }
+func (r servfailResponseError) Unwrap() error { return errServerFailure }
+
 var errRefused = errors.New("response code indicates refusal")
 var errServerFailure = errors.New("response code indicates server issue")
 var errTxIDMismatch = errors.New("txid doesn't match")
@@ -827,7 +837,7 @@ func (f *forwarder) sendUDP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	case dns.RCodeServerFailure:
 		f.logf("sendUDP: response code indicating server failure: %d", rcode)
 		metricDNSFwdUDPErrorServer.Add(1)
-		return nil, errServerFailure
+		return nil, servfailResponseError{out}
 	case dns.RCodeRefused:
 		// treat REFUSED as a soft error so other resolvers in the race can respond
 		f.logf("sendUDP: response code indicating refusal: %d", rcode)
@@ -972,7 +982,7 @@ func (f *forwarder) sendTCP(ctx context.Context, fq *forwardQuery, rr resolverAn
 	case dns.RCodeServerFailure:
 		f.logf("sendTCP: response code indicating server failure: %d", rcode)
 		metricDNSFwdTCPErrorServer.Add(1)
-		return nil, errServerFailure
+		return nil, servfailResponseError{out}
 	case dns.RCodeRefused:
 		// treat REFUSED as a soft error so other resolvers in the race can respond
 		f.logf("sendTCP: response code indicating refusal: %d", rcode)
@@ -1178,14 +1188,21 @@ func (f *forwarder) forwardWithDestChan(ctx context.Context, query packet, respo
 			if numErr == len(resolvers) {
 				var res packet
 				if sawNonRefused {
-					// At least one server failed with something other than REFUSED;
-					// return SERVFAIL regardless of what firstErr is.
-					r, err := servfailResponse(query)
-					if err != nil {
-						f.logf("building servfail response: %v", err)
-						return firstErr
+					// At least one server failed with SERVFAIL or a transport error
+					// (e.g. network failure, TxID mismatch, unsupported resolver type).
+					// All such errors map to SERVFAIL at the client level.
+					// Prefer returning the upstream SERVFAIL bytes from firstErr if
+					// available; otherwise synthesize a SERVFAIL response.
+					if servfailErr, ok := errors.AsType[servfailResponseError](firstErr); ok {
+						res = packet{servfailErr.res, query.family, query.addr}
+					} else {
+						r, err := servfailResponse(query)
+						if err != nil {
+							f.logf("building servfail response: %v", err)
+							return firstErr
+						}
+						res = r
 					}
-					res = r
 				} else {
 					// !sawNonRefused means every error was a refusedResponseError,
 					// so firstErr is guaranteed to wrap one.
