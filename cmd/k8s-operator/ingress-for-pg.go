@@ -138,16 +138,19 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 	// to the Tailscale Service in a multi-cluster Ingress setup have not
 	// resulted in another actor overwriting our Tailscale Service update.
 	needsRequeue := false
+	shortRequeue := false
 	if !ing.DeletionTimestamp.IsZero() || !r.shouldExpose(ing) {
 		needsRequeue, err = r.maybeCleanup(ctx, hostname, ing, logger, tailscaleClient, pg)
 	} else {
-		needsRequeue, err = r.maybeProvision(ctx, hostname, ing, logger, tailscaleClient, pg)
+		needsRequeue, shortRequeue, err = r.maybeProvision(ctx, hostname, ing, logger, tailscaleClient, pg)
 	}
 	if err != nil {
 		return res, err
 	}
 	if needsRequeue {
 		res = reconcile.Result{RequeueAfter: requeueInterval()}
+	} else if shortRequeue {
+		res = reconcile.Result{RequeueAfter: 30 * time.Second}
 	}
 	return res, nil
 }
@@ -160,37 +163,37 @@ func (r *HAIngressReconciler) Reconcile(ctx context.Context, req reconcile.Reque
 // If a Tailscale Service exists, but does not have an owner reference from any operator, we error
 // out assuming that this is an owner reference created by an unknown actor.
 // Returns true if the operation resulted in a Tailscale Service update.
-func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger, tsClient tsClient, pg *tsapi.ProxyGroup) (svcsChanged bool, err error) {
+func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname string, ing *networkingv1.Ingress, logger *zap.SugaredLogger, tsClient tsClient, pg *tsapi.ProxyGroup) (svcsChanged bool, shortRequeue bool, err error) {
 	// Currently (2025-05) Tailscale Services are behind an alpha feature flag that
 	// needs to be explicitly enabled for a tailnet to be able to use them.
 	serviceName := tailcfg.ServiceName("svc:" + hostname)
 	existingTSSvc, err := tsClient.GetVIPService(ctx, serviceName)
 	if err != nil && !isErrorTailscaleServiceNotFound(err) {
-		return false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
+		return false, false, fmt.Errorf("error getting Tailscale Service %q: %w", hostname, err)
 	}
 
 	if err = validateIngressClass(ctx, r.Client, r.ingressClassName); err != nil {
 		logger.Infof("error validating tailscale IngressClass: %v.", err)
-		return false, nil
+		return false, false, nil
 	}
 	// Get and validate ProxyGroup readiness
 	pgName := ing.Annotations[AnnotationProxyGroup]
 	if pgName == "" {
 		logger.Infof("[unexpected] no ProxyGroup annotation, skipping Tailscale Service provisioning")
-		return false, nil
+		return false, false, nil
 	}
 	logger = logger.With("ProxyGroup", pgName)
 
 	if !tsoperator.ProxyGroupAvailable(pg) {
 		logger.Infof("ProxyGroup is not (yet) ready")
-		return false, nil
+		return false, false, nil
 	}
 
 	// Validate Ingress configuration
 	if err := r.validateIngress(ctx, ing, pg); err != nil {
 		logger.Infof("invalid Ingress configuration: %v", err)
 		r.recorder.Event(ing, corev1.EventTypeWarning, "InvalidIngressConfiguration", err.Error())
-		return false, nil
+		return false, false, nil
 	}
 
 	if !IsHTTPSEnabledOnTailnet(r.tsnetServer) {
@@ -205,7 +208,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		logger.Infof("exposing Ingress over tailscale")
 		ing.Finalizers = append(ing.Finalizers, FinalizerNamePG)
 		if err := r.Update(ctx, ing); err != nil {
-			return false, fmt.Errorf("failed to add finalizer: %w", err)
+			return false, false, fmt.Errorf("failed to add finalizer: %w", err)
 		}
 		r.mu.Lock()
 		r.managedIngresses.Add(ing.UID)
@@ -223,7 +226,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	// (eventually) removed.
 	svcsChanged, err = r.maybeCleanupProxyGroup(ctx, logger, tsClient, pg)
 	if err != nil {
-		return false, fmt.Errorf("failed to cleanup Tailscale Service resources for ProxyGroup: %w", err)
+		return false, false, fmt.Errorf("failed to cleanup Tailscale Service resources for ProxyGroup: %w", err)
 	}
 
 	// 2. Ensure that there isn't a Tailscale Service with the same hostname
@@ -243,31 +246,31 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		msg := fmt.Sprintf("error ensuring ownership of Tailscale Service %s: %v. %s", hostname, err, instr)
 		logger.Warn(msg)
 		r.recorder.Event(ing, corev1.EventTypeWarning, "InvalidTailscaleService", msg)
-		return false, nil
+		return false, false, nil
 	}
 	// 3. Ensure that TLS Secret and RBAC exists
 	dnsName, err := dnsNameForService(ctx, r.Client, serviceName, pg, r.tsNamespace)
 	if err != nil {
-		return false, fmt.Errorf("error determining DNS name for service: %w", err)
+		return false, false, fmt.Errorf("error determining DNS name for service: %w", err)
 	}
 
 	if err = r.ensureCertResources(ctx, pg, dnsName, ing); err != nil {
-		return false, fmt.Errorf("error ensuring cert resources: %w", err)
+		return false, false, fmt.Errorf("error ensuring cert resources: %w", err)
 	}
 
 	// 4. Ensure that the serve config for the ProxyGroup contains the Tailscale Service.
 	cm, cfg, err := r.proxyGroupServeConfig(ctx, pgName)
 	if err != nil {
-		return false, fmt.Errorf("error getting Ingress serve config: %w", err)
+		return false, false, fmt.Errorf("error getting Ingress serve config: %w", err)
 	}
 	if cm == nil {
 		logger.Infof("no Ingress serve config ConfigMap found, unable to update serve config. Ensure that ProxyGroup is healthy.")
-		return svcsChanged, nil
+		return svcsChanged, shortRequeue, nil
 	}
 	ep := ipn.HostPort(fmt.Sprintf("%s:443", dnsName))
 	handlers, err := handlersForIngress(ctx, ing, r.Client, r.recorder, dnsName, logger)
 	if err != nil {
-		return false, fmt.Errorf("failed to get handlers for Ingress: %w", err)
+		return false, false, fmt.Errorf("failed to get handlers for Ingress: %w", err)
 	}
 	ingCfg := &ipn.ServiceConfig{
 		TCP: map[uint16]*ipn.TCPPortHandler{
@@ -322,11 +325,11 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		mak.Set(&cfg.Services, serviceName, ingCfg)
 		cfgBytes, err := json.Marshal(cfg)
 		if err != nil {
-			return false, fmt.Errorf("error marshaling serve config: %w", err)
+			return false, false, fmt.Errorf("error marshaling serve config: %w", err)
 		}
 		mak.Set(&cm.BinaryData, serveConfigKey, cfgBytes)
 		if err := r.Update(ctx, cm); err != nil {
-			return false, fmt.Errorf("error updating serve config: %w", err)
+			return false, false, fmt.Errorf("error updating serve config: %w", err)
 		}
 	}
 
@@ -360,7 +363,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		!ownersAreSetAndEqual(tsSvc, existingTSSvc) {
 		logger.Infof("Ensuring Tailscale Service exists and is up to date")
 		if err := tsClient.CreateOrUpdateVIPService(ctx, tsSvc); err != nil {
-			return false, fmt.Errorf("error creating Tailscale Service: %w", err)
+			return false, false, fmt.Errorf("error creating Tailscale Service: %w", err)
 		}
 	}
 
@@ -370,14 +373,19 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	if isHTTPEndpointEnabled(ing) || isHTTPRedirectEnabled(ing) {
 		mode = serviceAdvertisementHTTPAndHTTPS
 	}
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, mode, pg); err != nil {
-		return false, fmt.Errorf("failed to update tailscaled config: %w", err)
+	shouldBeAdvertised, err := r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, mode, pg)
+	if err != nil {
+		return false, false, fmt.Errorf("failed to update tailscaled config: %w", err)
+	}
+	// If certs are not yet ready, schedule a short requeue.
+	if !shouldBeAdvertised {
+		shortRequeue = true
 	}
 
 	// 6. Update Ingress status if ProxyGroup Pods are ready.
 	count, err := numberPodsAdvertising(ctx, r.Client, r.tsNamespace, pg.Name, serviceName)
 	if err != nil {
-		return false, fmt.Errorf("failed to check if any Pods are configured: %w", err)
+		return false, false, fmt.Errorf("failed to check if any Pods are configured: %w", err)
 	}
 
 	oldStatus := ing.Status.DeepCopy()
@@ -385,11 +393,14 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	switch count {
 	case 0:
 		ing.Status.LoadBalancer.Ingress = nil
+		if shouldBeAdvertised {
+			shortRequeue = true
+		}
 	default:
 		var ports []networkingv1.IngressPortStatus
 		hasCerts, err := hasCerts(ctx, r.Client, r.tsNamespace, serviceName, pg)
 		if err != nil {
-			return false, fmt.Errorf("error checking TLS credentials provisioned for Ingress: %w", err)
+			return false, false, fmt.Errorf("error checking TLS credentials provisioned for Ingress: %w", err)
 		}
 		// If TLS certs have not been issued (yet), do not set port 443.
 		if hasCerts {
@@ -417,7 +428,7 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 		}
 	}
 	if apiequality.Semantic.DeepEqual(oldStatus, &ing.Status) {
-		return svcsChanged, nil
+		return svcsChanged, shortRequeue, nil
 	}
 
 	const prefix = "Updating Ingress status"
@@ -428,10 +439,10 @@ func (r *HAIngressReconciler) maybeProvision(ctx context.Context, hostname strin
 	}
 
 	if err = r.Status().Update(ctx, ing); err != nil {
-		return false, fmt.Errorf("failed to update Ingress status: %w", err)
+		return false, false, fmt.Errorf("failed to update Ingress status: %w", err)
 	}
 
-	return svcsChanged, nil
+	return svcsChanged, shortRequeue, nil
 }
 
 // maybeCleanupProxyGroup ensures that any Tailscale Services that are
@@ -485,7 +496,7 @@ func (r *HAIngressReconciler) maybeCleanupProxyGroup(ctx context.Context, logger
 			}
 
 			// Make sure the Tailscale Service is not advertised in tailscaled or serve config.
-			if err = r.maybeUpdateAdvertiseServicesConfig(ctx, tsSvcName, serviceAdvertisementOff, pg); err != nil {
+			if _, err = r.maybeUpdateAdvertiseServicesConfig(ctx, tsSvcName, serviceAdvertisementOff, pg); err != nil {
 				return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 			}
 
@@ -571,7 +582,7 @@ func (r *HAIngressReconciler) maybeCleanup(ctx context.Context, hostname string,
 	}
 
 	// 4. Unadvertise the Tailscale Service in tailscaled config.
-	if err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, serviceAdvertisementOff, pg); err != nil {
+	if _, err = r.maybeUpdateAdvertiseServicesConfig(ctx, serviceName, serviceAdvertisementOff, pg); err != nil {
 		return false, fmt.Errorf("failed to update tailscaled config services: %w", err)
 	}
 
@@ -755,11 +766,11 @@ const (
 	serviceAdvertisementHTTPAndHTTPS                                 // Both ports 80 and 443 should be advertised
 )
 
-func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, pg *tsapi.ProxyGroup) (err error) {
+func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Context, serviceName tailcfg.ServiceName, mode serviceAdvertisementMode, pg *tsapi.ProxyGroup) (shouldBeAdvertised bool, err error) {
 	// Get all config Secrets for this ProxyGroup.
 	secrets := &corev1.SecretList{}
 	if err := r.List(ctx, secrets, client.InNamespace(r.tsNamespace), client.MatchingLabels(pgSecretLabels(pg.Name, kubetypes.LabelSecretTypeConfig))); err != nil {
-		return fmt.Errorf("failed to list config Secrets: %w", err)
+		return false, fmt.Errorf("failed to list config Secrets: %w", err)
 	}
 
 	// Verify that TLS cert for the Tailscale Service has been successfully issued
@@ -772,9 +783,9 @@ func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 	// TLS cert is not yet provisioned.
 	hasCert, err := hasCerts(ctx, r.Client, r.tsNamespace, serviceName, pg)
 	if err != nil {
-		return fmt.Errorf("error checking TLS credentials provisioned for service %q: %w", serviceName, err)
+		return false, fmt.Errorf("error checking TLS credentials provisioned for service %q: %w", serviceName, err)
 	}
-	shouldBeAdvertised := (mode == serviceAdvertisementHTTPAndHTTPS) ||
+	shouldBeAdvertised = (mode == serviceAdvertisementHTTPAndHTTPS) ||
 		(mode == serviceAdvertisementHTTPS && hasCert) // if we only expose port 443 and don't have certs (yet), do not advertise
 
 	for _, secret := range secrets.Items {
@@ -782,7 +793,7 @@ func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 		for fileName, confB := range secret.Data {
 			var conf ipn.ConfigVAlpha
 			if err := json.Unmarshal(confB, &conf); err != nil {
-				return fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
+				return false, fmt.Errorf("error unmarshalling ProxyGroup config: %w", err)
 			}
 
 			// Update the services to advertise if required.
@@ -803,7 +814,7 @@ func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 			// Update the Secret.
 			confB, err := json.Marshal(conf)
 			if err != nil {
-				return fmt.Errorf("error marshalling ProxyGroup config: %w", err)
+				return false, fmt.Errorf("error marshalling ProxyGroup config: %w", err)
 			}
 			mak.Set(&secret.Data, fileName, confB)
 			updated = true
@@ -811,12 +822,12 @@ func (r *HAIngressReconciler) maybeUpdateAdvertiseServicesConfig(ctx context.Con
 
 		if updated {
 			if err := r.Update(ctx, &secret); err != nil {
-				return fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
+				return false, fmt.Errorf("error updating ProxyGroup config Secret: %w", err)
 			}
 		}
 	}
 
-	return nil
+	return shouldBeAdvertised, nil
 }
 
 func numberPodsAdvertising(ctx context.Context, cl client.Client, tsNamespace, pgName string, serviceName tailcfg.ServiceName) (int, error) {

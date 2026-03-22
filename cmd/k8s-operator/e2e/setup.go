@@ -32,6 +32,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"go.uber.org/zap"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
@@ -69,10 +70,14 @@ const (
 )
 
 var (
-	tsClient   *tailscale.Client // For API calls to control.
-	tnClient   *tsnet.Server     // For testing real tailnet traffic.
-	restCfg    *rest.Config      // For constructing a client-go client if necessary.
-	kubeClient client.WithWatch  // For k8s API calls.
+	tsClient           *tailscale.Client // For API calls to control.
+	secondTSClient     *tailscale.Client // For API calls to the secondary tailnet (_second_tailnet).
+	secondClientID     string            // OAuth client_id for second tailnet.
+	secondClientSecret string            // OAuth client_secret for second tailnet.
+	tnClient           *tsnet.Server     // For testing real tailnet traffic.
+	restCfg            *rest.Config      // For constructing a client-go client if necessary.
+	kubeClient         client.WithWatch  // For k8s API calls.
+	clusterLoginServer string
 
 	//go:embed certs/pebble.minica.crt
 	pebbleMiniCACert []byte
@@ -153,7 +158,6 @@ func runTests(m *testing.M) (int, error) {
 	}
 
 	var (
-		clusterLoginServer     string   // Login server from cluster Pod point of view.
 		clientID, clientSecret string   // OAuth client for the operator to use.
 		caPaths                []string // Extra CA cert file paths to add to images.
 
@@ -256,7 +260,7 @@ func runTests(m *testing.M) (int, error) {
 		tsClient = tailscale.NewClient("-", tailscale.APIKey(apiKeyData.APIKey))
 		tsClient.BaseURL = "http://localhost:31544"
 
-		// Set ACLs and create OAuth client.
+		// Set ACLS and create Oauth client for primary tailnet
 		req, _ := http.NewRequest("POST", tsClient.BuildTailnetURL("acl"), bytes.NewReader(requiredACLs))
 		resp, err := tsClient.Do(req)
 		if err != nil {
@@ -268,7 +272,7 @@ func runTests(m *testing.M) (int, error) {
 			return 0, fmt.Errorf("HTTP %d setting ACLs: %s", resp.StatusCode, string(b))
 		}
 		logger.Infof("ACLs configured")
-
+		logger.Info("set ACLs for primary tailnet")
 		reqBody, err := json.Marshal(map[string]any{
 			"keyType":     "client",
 			"scopes":      []string{"auth_keys", "devices:core", "services"},
@@ -297,7 +301,73 @@ func runTests(m *testing.M) (int, error) {
 		}
 		clientID = key.ID
 		clientSecret = key.Key
+		logger.Info("set Oauth credentials for primary tailnet")
+
+		// Create second tailnet.
+		secondClientCreds, err := createTailnet(tsClient.BaseURL, apiKeyData.APIKey)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create second tailnet: %w", err)
+		}
+
+		// Set up client for second tailnet- todo -get magic dns name from repsonse too?
+		secondClientID = secondClientCreds.ClientID
+		secondClientSecret = secondClientCreds.ClientSecret
+		source := secondClientCreds.TokenSource(ctx)
+		httpClient := oauth2.NewClient(ctx, source)
+		secondTSClient = tailscale.NewClient("-", nil)
+		secondTSClient.UserAgent = "e2e"
+		secondTSClient.HTTPClient = httpClient
+		secondTSClient.BaseURL = "http://localhost:31544"
+
+		logger.Infof("OAUTH_CLIENT_ID=%s", secondClientID)
+		logger.Infof("OAUTH_CLIENT_SECRET=%s", secondClientSecret)
+
+		// Set ACLs for second tailnet.
+		req, _ = http.NewRequest("POST", secondTSClient.BuildTailnetURL("acl"), bytes.NewReader(requiredACLs))
+		resp, err = secondTSClient.Do(req)
+		if err != nil {
+			return 0, fmt.Errorf("failed to set ACLs: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return 0, fmt.Errorf("HTTP %d setting ACLs: %s", resp.StatusCode, string(b))
+		}
+
+		reqbody := []byte(`{
+			"keyType": "client",
+			"scopes": [
+				"all"
+			],
+			"tags": ["tag:k8s-operator"]
+		}`)
+		req, _ = http.NewRequest("PUT", secondTSClient.BuildTailnetURL("keys", secondClientID), bytes.NewReader(reqbody))
+		resp, err = secondTSClient.Do(req)
+		if err != nil {
+			return 0, fmt.Errorf("failed to set oauth scopes: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return 0, fmt.Errorf("HTTP %d setting oauth scopes: %s", resp.StatusCode, string(b))
+		}
+		logger.Infof("Oauth scopes configured")
+
+		// Set HTTPS on second Tailnet
+		req, _ = http.NewRequest("PATCH", "http://localhost:31544/api/v2/tailnet/-/settings", bytes.NewBuffer([]byte(`{"httpsEnabled": true}`)))
+		resp, err = secondTSClient.Do(req)
+		if err != nil {
+			return 0, fmt.Errorf("failed to enable HTTPS: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return 0, fmt.Errorf("HTTP %d enabling https: %s", resp.StatusCode, string(b))
+		}
+		logger.Infof("HTTPS settings configured")
+
 	} else {
+		// TODO: set up a tailscale client for the second tailnet
 		clientSecret = os.Getenv("TS_API_CLIENT_SECRET")
 		if clientSecret == "" {
 			return 0, fmt.Errorf("must use --devcontrol or set TS_API_CLIENT_SECRET to an OAuth client suitable for the operator")
@@ -555,6 +625,12 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 					},
 					TailscaleContainer: &tsapi.Container{
 						ImagePullPolicy: "IfNotPresent",
+						Env: []tsapi.Env{
+							{
+								Name:  "TS_DEBUG_ACME_DIRECTORY_URL",
+								Value: "https://pebble:14000/dir",
+							},
+						},
 					},
 				},
 			},
@@ -565,7 +641,6 @@ func applyDefaultProxyClass(ctx context.Context, logger *zap.SugaredLogger, cl c
 	if err := cl.Patch(ctx, pc, client.Apply, owner); err != nil {
 		return fmt.Errorf("failed to apply default ProxyClass: %w", err)
 	}
-
 	// Wait for the ProxyClass to be marked ready.
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -717,4 +792,37 @@ func buildImage(ctx context.Context, dir, repo, target, tag string, extraCACerts
 	}
 
 	return nil
+}
+
+func createTailnet(baseURL, apiKey string) (clientcredentials.Config, error) {
+	tailnetName := fmt.Sprintf("second-tailnet-%d", time.Now().Unix())
+	body, err := json.Marshal(map[string]any{"displayName": tailnetName})
+	if err != nil {
+		return clientcredentials.Config{}, err
+	}
+	req, _ := http.NewRequest("POST", baseURL+"/api/v2/organizations/-/tailnets", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return clientcredentials.Config{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return clientcredentials.Config{}, fmt.Errorf("HTTP %d creating tailnet: %s", resp.StatusCode, string(b))
+	}
+	var result struct {
+		OauthClient struct {
+			ID     string `json:"id"`
+			Secret string `json:"secret"`
+		} `json:"oauthClient"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return clientcredentials.Config{}, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return clientcredentials.Config{
+		ClientID:     result.OauthClient.ID,
+		ClientSecret: result.OauthClient.Secret,
+		TokenURL:     baseURL + "/api/v2/oauth/token",
+	}, nil
 }
