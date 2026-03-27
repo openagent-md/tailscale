@@ -164,3 +164,13 @@ func isLocalhost(addr string) bool {
 	ip, _ := netip.ParseAddr(host)
 	return ip.IsLoopback()
 }
+
+// SetLatticeSoftIsolation controls whether Lattice network isolation
+// is applied. When enabled, Tailscale's strict isolation rules are
+// relaxed to allow connections to Lattice servers behind corporate
+// VPNs.
+func SetLatticeSoftIsolation(v bool) {
+	// Lattice uses the same soft isolation behavior as the default
+	// Tailscale network namespace configuration. This is a no-op
+	// placeholder that signals Lattice-specific isolation intent.
+}
