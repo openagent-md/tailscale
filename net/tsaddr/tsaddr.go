@@ -318,3 +318,10 @@ func MapVia(siteID uint32, v4 netip.Prefix) (via netip.Prefix, err error) {
 	copy(a[12:], ip4a[:])
 	return netip.PrefixFrom(netip.AddrFrom16(a), v4.Bits()+64+32), nil
 }
+
+// LatticeServiceIPv6 returns the IPv6 service address used by Lattice Connect
+// for detecting whether the tunnel is active. It is an alias for
+// CoderServiceIPv6 maintained for backwards compatibility during rebranding.
+func LatticeServiceIPv6() netip.Addr {
+	return CoderServiceIPv6()
+}

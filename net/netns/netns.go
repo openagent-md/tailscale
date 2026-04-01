@@ -225,3 +225,10 @@ func getAddr(address string) (netip.Addr, error) {
 
 	return addr, nil
 }
+
+// SetLatticeSoftIsolation enables or disables Lattice's soft-isolation mode.
+// It is an alias for SetCoderSoftIsolation maintained for backwards
+// compatibility during rebranding.
+func SetLatticeSoftIsolation(v bool) {
+	SetCoderSoftIsolation(v)
+}
