@@ -67,7 +67,7 @@ import (
 	"tailscale.com/wgengine/wgcfg/nmcfg"
 	"tailscale.com/wgengine/wglog"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 )
 
 func init() {

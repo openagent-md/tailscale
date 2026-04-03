@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/net/netutil"
 	"tailscale.com/types/key"

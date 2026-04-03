@@ -11,7 +11,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 )
 
 func init() {

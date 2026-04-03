@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 	"tailscale.com/derp"
 	"tailscale.com/types/key"
 )
