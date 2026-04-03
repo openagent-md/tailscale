@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 	"tailscale.com/syncs"
 )
 

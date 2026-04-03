@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/url"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 	"tailscale.com/control/controlbase"
 	"tailscale.com/control/controlhttp/controlhttpcommon"
 	"tailscale.com/net/wsconn"

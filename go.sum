@@ -919,6 +919,10 @@ github.com/onsi/ginkgo/v2 v2.21.0 h1:7rg/4f3rB88pb5obDgNZrNHrQ4e6WpjonchcpuBRnZM
 github.com/onsi/ginkgo/v2 v2.21.0/go.mod h1:7Du3c42kxCUegi0IImZ1wUQzMBVecgIHjR1C+NkhLQo=
 github.com/onsi/gomega v1.36.2 h1:koNYke6TVk6ZmnyHrCXba/T/MoLBXFjeC1PtvYgw0A8=
 github.com/onsi/gomega v1.36.2/go.mod h1:DdwyADRjrc825LhMEkD76cHR5+pUnjhUN8GlHlRPHzY=
+github.com/openagent-md/websocket v1.8.14 h1:PsaHEeJcx7vRzLW7fdGnoAs7r9oV/O/cgWRzj/OIibU=
+github.com/openagent-md/websocket v1.8.14/go.mod h1:KmOxLcuV476eHsTXiYaAn6L0itSl8wO8uakh65ZJlxk=
+github.com/openagent-md/websocket v1.8.15 h1:3J2bZFGZaZKgS//H4vSCm7gwXf/aCJnKEXR114FF2j8=
+github.com/openagent-md/websocket v1.8.15/go.mod h1:KmOxLcuV476eHsTXiYaAn6L0itSl8wO8uakh65ZJlxk=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=

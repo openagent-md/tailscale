@@ -21,7 +21,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 	"tailscale.com/tstest/natlab/vnet"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/must"

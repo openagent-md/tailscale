@@ -21,7 +21,6 @@ require (
 	github.com/bradfitz/monogok v0.0.0-20260310223834-65a3d9465088
 	github.com/bramvdbogaerde/go-scp v1.4.0
 	github.com/cilium/ebpf v0.16.0
-	github.com/coder/websocket v1.8.12
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/creachadair/mds v0.25.9
@@ -77,6 +76,7 @@ require (
 	github.com/mdlayher/sdnotify v1.0.0
 	github.com/miekg/dns v1.1.58
 	github.com/mitchellh/go-ps v1.0.0
+	github.com/openagent-md/websocket v1.8.15
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/pkg/errors v0.9.1
@@ -162,6 +162,7 @@ require (
 	github.com/ccojocar/zxcvbn-go v1.0.2 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
 	github.com/ckaznocha/intrange v0.1.0 // indirect
+	github.com/coder/websocket v1.8.12 // indirect
 	github.com/containerd/containerd v1.7.29 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect

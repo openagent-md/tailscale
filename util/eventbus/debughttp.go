@@ -21,7 +21,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coder/websocket"
+	"github.com/openagent-md/websocket"
 	"tailscale.com/tsweb"
 )
 
