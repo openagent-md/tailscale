@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/openagent-md/websocket"
 	"tailscale.com/derp"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -323,4 +325,133 @@ func TestForceWebsockets(t *testing.T) {
 	}
 
 	c.Close()
+}
+
+func TestClientHeaders(t *testing.T) {
+	t.Run("nil when neither set", func(t *testing.T) {
+		c := &Client{}
+		if got := c.headers(); got != nil {
+			t.Fatalf("expected nil headers, got %v", got)
+		}
+	})
+	t.Run("returns Header when GetHeaders is nil", func(t *testing.T) {
+		want := http.Header{"X-Test": []string{"static"}}
+		c := &Client{Header: want}
+		if got := c.headers().Get("X-Test"); got != "static" {
+			t.Fatalf("expected static header, got %q", got)
+		}
+	})
+	t.Run("GetHeaders takes precedence and is invoked on every call", func(t *testing.T) {
+		var calls int
+		c := &Client{
+			Header: http.Header{"X-Test": []string{"static"}},
+			GetHeaders: func() http.Header {
+				calls++
+				return http.Header{"X-Test": []string{"dynamic"}}
+			},
+		}
+		if got := c.headers().Get("X-Test"); got != "dynamic" {
+			t.Fatalf("expected dynamic header, got %q", got)
+		}
+		_ = c.headers()
+		if calls != 2 {
+			t.Fatalf("expected GetHeaders to be invoked on every call, got %d calls", calls)
+		}
+	})
+}
+
+func TestTLSConfigBypassesTLSDial(t *testing.T) {
+	node := &tailcfg.DERPNode{HostName: "derp.example.com"}
+
+	t.Run("default path wraps via tlsdial.Config", func(t *testing.T) {
+		// tlsdial.Config installs its own VerifyConnection. Confirming it
+		// runs is the easiest way to assert we did NOT bypass it. We must
+		// not pass a base config that would cause tlsdial.Config to panic.
+		c := &Client{TLSConfig: &tls.Config{RootCAs: x509.NewCertPool()}}
+		got := c.tlsConfig(node)
+		if got.VerifyConnection == nil {
+			t.Fatal("expected default path to install tlsdial's VerifyConnection")
+		}
+		if !got.InsecureSkipVerify {
+			t.Fatal("expected default path to set InsecureSkipVerify (tlsdial does its own verify)")
+		}
+		if got.ServerName != node.HostName {
+			t.Fatalf("ServerName: got %q, want %q", got.ServerName, node.HostName)
+		}
+	})
+
+	t.Run("bypass path uses caller config as-is", func(t *testing.T) {
+		// A typical "I'm bringing my own verifier" config that would make
+		// tlsdial.Config panic.
+		base := &tls.Config{
+			InsecureSkipVerify: true,
+			VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
+				return nil
+			},
+		}
+		c := &Client{TLSConfig: base, TLSConfigBypassesTLSDial: true}
+		got := c.tlsConfig(node)
+		if got == base {
+			t.Fatal("expected tlsConfig to clone the base config")
+		}
+		if got.VerifyConnection != nil {
+			t.Fatal("bypass path must not install tlsdial's VerifyConnection")
+		}
+		if !got.InsecureSkipVerify {
+			t.Fatal("bypass path must preserve caller's InsecureSkipVerify")
+		}
+		if got.VerifyPeerCertificate == nil {
+			t.Fatal("bypass path must preserve caller's VerifyPeerCertificate")
+		}
+		if got.ServerName != node.HostName {
+			t.Fatalf("ServerName fallback: got %q, want %q", got.ServerName, node.HostName)
+		}
+		if want := []string{"http/1.1"}; len(got.NextProtos) != 1 || got.NextProtos[0] != want[0] {
+			t.Fatalf("NextProtos: got %v, want %v", got.NextProtos, want)
+		}
+	})
+
+	t.Run("bypass path preserves caller-set ServerName", func(t *testing.T) {
+		base := &tls.Config{
+			InsecureSkipVerify: true,
+			VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
+				return nil
+			},
+			ServerName: "explicit.example.com",
+		}
+		c := &Client{TLSConfig: base, TLSConfigBypassesTLSDial: true}
+		got := c.tlsConfig(node)
+		if got.ServerName != "explicit.example.com" {
+			t.Fatalf("ServerName: got %q, want explicit.example.com", got.ServerName)
+		}
+	})
+
+	t.Run("bypass flag without TLSConfig falls back to default path", func(t *testing.T) {
+		c := &Client{TLSConfigBypassesTLSDial: true}
+		got := c.tlsConfig(node)
+		if got.VerifyConnection == nil {
+			t.Fatal("expected fallback to tlsdial path when TLSConfig is nil")
+		}
+	})
+
+	t.Run("bypass path honors node.InsecureForTests", func(t *testing.T) {
+		base := &tls.Config{
+			InsecureSkipVerify: true,
+			VerifyPeerCertificate: func(_ [][]byte, _ [][]*x509.Certificate) error {
+				return nil
+			},
+		}
+		c := &Client{TLSConfig: base, TLSConfigBypassesTLSDial: true}
+		insecureNode := &tailcfg.DERPNode{HostName: "derp.example.com", InsecureForTests: true}
+		got := c.tlsConfig(insecureNode)
+		if !got.InsecureSkipVerify {
+			t.Fatal("expected InsecureForTests to keep InsecureSkipVerify=true")
+		}
+		if got.VerifyPeerCertificate != nil {
+			t.Fatal("expected InsecureForTests to clear VerifyPeerCertificate")
+		}
+		if got.VerifyConnection != nil {
+			t.Fatal("expected InsecureForTests to clear VerifyConnection")
+		}
+	})
 }

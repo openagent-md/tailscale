@@ -8,6 +8,7 @@ package magicsock
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -74,6 +75,15 @@ const (
 	// will silently clamp the value.
 	socketBufferSize = 7 << 20
 )
+
+// derpTLSPair holds the TLS config and the bypass-tlsdial flag for DERP
+// connections as a single atomic-pointer payload, so the DERP client
+// constructor can observe both as a coherent pair. See
+// Conn.SetDERPTLSConfigWithBypass.
+type derpTLSPair struct {
+	cfg           *tls.Config
+	bypassTLSDial bool
+}
 
 // A Conn routes UDP packets and actively manages a list of its endpoints.
 type Conn struct {
@@ -170,11 +180,23 @@ type Conn struct {
 	// headers that are passed to the DERP HTTP client
 	derpHeader atomic.Pointer[http.Header]
 
+	// derpGetHeaders, if non-nil, is called by the DERP HTTP client on every
+	// (re)connect to obtain a fresh set of HTTP headers. When non-nil it
+	// takes precedence over derpHeader. See derphttp.Client.GetHeaders.
+	derpGetHeaders atomic.Pointer[func() http.Header]
+
 	// whether websocket is always used by the DERP HTTP client
 	derpForceWebsockets atomic.Bool
 
 	// derpRegionDialer is passed to the DERP client
 	derpRegionDialer atomic.Pointer[func(ctx context.Context, region *tailcfg.DERPRegion) net.Conn]
+
+	// derpTLSConfig holds the TLS config and the bypass-tlsdial flag for
+	// DERP connections as a single atomic-pointer payload, so a reconnect
+	// can observe both as a coherent pair. It is updated by
+	// SetDERPTLSConfig and SetDERPTLSConfigWithBypass, and read by the
+	// DERP client constructor in magicsock/derp.go.
+	derpTLSConfig atomic.Pointer[derpTLSPair]
 
 	// stats maintains per-connection counters.
 	stats atomic.Pointer[connstats.Statistics]
@@ -458,11 +480,21 @@ func NewConn(opts Options) (*Conn, error) {
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
 		GetDERPHeaders: func() http.Header {
+			if getHeaders := c.derpGetHeaders.Load(); getHeaders != nil {
+				return (*getHeaders)()
+			}
 			h := c.derpHeader.Load()
 			if h == nil {
 				return nil
 			}
 			return h.Clone()
+		},
+		GetDERPTLSConfig: func() (*tls.Config, bool) {
+			pair := c.derpTLSConfig.Load()
+			if pair == nil {
+				return nil, false
+			}
+			return pair.cfg, pair.bypassTLSDial
 		},
 	}
 
@@ -1755,8 +1787,43 @@ func (c *Conn) SetDERPHeader(header http.Header) {
 	c.derpHeader.Store(&header)
 }
 
+// SetDERPGetHeaders sets a callback invoked by the DERP HTTP client on every
+// (re)connect to obtain a fresh set of HTTP headers. When non-nil it takes
+// precedence over the value set with SetDERPHeader. Pass nil to clear.
+func (c *Conn) SetDERPGetHeaders(getHeaders func() http.Header) {
+	if getHeaders == nil {
+		c.derpGetHeaders.Store(nil)
+		return
+	}
+	c.derpGetHeaders.Store(&getHeaders)
+}
+
 func (c *Conn) SetDERPForceWebsockets(v bool) {
 	c.derpForceWebsockets.Store(v)
+}
+
+// SetDERPTLSConfig sets the TLS config used for DERP connections. The
+// supplied config will be wrapped via tlsdial.Config when consumed. Use
+// SetDERPTLSConfigWithBypass instead when the config performs its own
+// server verification (e.g. custom CAs / mTLS frameworks that set
+// InsecureSkipVerify=true and a VerifyPeerCertificate callback) — those
+// configs cause tlsdial.Config to panic.
+//
+// SetDERPTLSConfig and SetDERPTLSConfigWithBypass update the (cfg, bypass)
+// pair atomically with respect to readers in magicsock/derp.go.
+func (c *Conn) SetDERPTLSConfig(cfg *tls.Config) {
+	c.derpTLSConfig.Store(&derpTLSPair{cfg: cfg, bypassTLSDial: false})
+}
+
+// SetDERPTLSConfigWithBypass atomically updates both the DERP TLS config
+// and the bypass-tlsdial flag. This is the recommended setter when
+// bypass=true: there is no observable intermediate state where the new
+// custom-verifier config is paired with the old bypass=false flag (which
+// would panic inside tlsdial.Config), nor any state where the new
+// publicly-trusted config is paired with a stale bypass=true (which would
+// silently skip server verification).
+func (c *Conn) SetDERPTLSConfigWithBypass(cfg *tls.Config, bypassTLSDial bool) {
+	c.derpTLSConfig.Store(&derpTLSPair{cfg: cfg, bypassTLSDial: bypassTLSDial})
 }
 
 func (c *Conn) SetDERPRegionDialer(dialer func(ctx context.Context, region *tailcfg.DERPRegion) net.Conn) {

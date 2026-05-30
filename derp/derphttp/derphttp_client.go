@@ -52,11 +52,67 @@ import (
 // Send/Recv will completely re-establish the connection (unless Close
 // has been called).
 type Client struct {
-	Header    http.Header
-	TLSConfig *tls.Config        // optional; nil means default
-	DNSCache  *dnscache.Resolver // optional; nil means no caching
-	MeshKey   string             // optional; for trusted clients
-	IsProber  bool               // optional; for probers to optional declare themselves as such
+	Header http.Header
+
+	// GetHeaders, if non-nil, returns a fresh set of HTTP headers to send
+	// on every (re)connect to the DERP server. When non-nil it takes
+	// precedence over Header. This is useful when a caller needs to inject
+	// short-lived authentication tokens (e.g. for an authenticating
+	// reverse proxy in front of DERP) that must be refreshed on each
+	// reconnect, rather than captured once at startup. The same pattern
+	// is already used by netcheck.Client.GetDERPHeaders.
+	//
+	// Implementations must be cheap and non-blocking: GetHeaders is invoked
+	// from connect() while the Client's internal mutex is held, so it must
+	// not call back into this Client (Send, Close, etc.) or acquire the
+	// lock of any caller that may, in turn, call into this Client (notably
+	// magicsock.Conn.mu). It should also avoid blocking I/O on the hot
+	// reconnect path; cache and refresh in the background where possible.
+	//
+	// Returning a nil http.Header is treated the same as a missing static
+	// Header: the connect request goes out without those caller-supplied
+	// headers (i.e. without auth). Implementations that fail to obtain
+	// fresh credentials should generally return the most recent known-good
+	// value rather than nil, so the server can return a clear 401 instead
+	// of a generic auth failure.
+	GetHeaders func() http.Header
+
+	TLSConfig *tls.Config // optional; nil means default
+
+	// TLSConfigBypassesTLSDial, if true, causes TLSConfig to be used as-is
+	// (after a Clone and ServerName housekeeping) instead of being passed
+	// through tlsdial.Config. The default behavior wraps TLSConfig in
+	// Tailscale's hosted-DERP verification helper, which installs a
+	// VerifyConnection hook with a baked-in Let's Encrypt fallback and
+	// rejects (panics on) base configs that already set InsecureSkipVerify
+	// or VerifyConnection.
+	//
+	// Set this to true when the caller is responsible for server
+	// verification — e.g. when DERP is fronted by a reverse proxy that
+	// presents a non-publicly-trusted certificate, when using an mTLS
+	// framework that performs its own peer verification (custom CAs,
+	// SPIFFE-style identity), or any case in which the caller has supplied
+	// VerifyPeerCertificate / VerifyConnection on TLSConfig and does not
+	// want the bake-in fallback.
+	//
+	// SECURITY: when this flag is true, the supplied TLSConfig is the
+	// SOLE source of server verification. A TLSConfig with
+	// InsecureSkipVerify=true and no VerifyPeerCertificate /
+	// VerifyConnection callback will result in a TLS handshake that
+	// performs no server identity check at all. Callers MUST either rely
+	// on stock RootCAs + hostname matching (i.e. leave InsecureSkipVerify
+	// false), or provide a VerifyPeerCertificate / VerifyConnection that
+	// implements an equivalent check.
+	//
+	// When true, TLSConfig must be non-nil; the flag is ignored otherwise.
+	// Per-DERPNode overrides are still honored: InsecureForTests still
+	// disables verification (intentionally), but CertName (which is
+	// implemented by tlsdial) is ignored.
+	TLSConfigBypassesTLSDial bool
+
+	DNSCache *dnscache.Resolver // optional; nil means no caching
+	MeshKey  string             // optional; for trusted clients
+	IsProber bool               // optional; for probers to optional declare themselves as such
 
 	// Allow forcing WebSocket fallback for situations where proxies do not
 	// play well with `Upgrade: derp`. Turning this on will cause the client to
@@ -111,6 +167,17 @@ type Client struct {
 
 func (c *Client) String() string {
 	return fmt.Sprintf("<derphttp_client.Client %s url=%s>", c.serverPubKey.ShortString(), c.url)
+}
+
+// headers returns the HTTP headers to send on the next DERP connection
+// attempt. If GetHeaders is set, it is invoked on every call (so callers can
+// refresh short-lived tokens). Otherwise the static Header field is used.
+// Either may be nil.
+func (c *Client) headers() http.Header {
+	if c.GetHeaders != nil {
+		return c.GetHeaders()
+	}
+	return c.Header
 }
 
 // NewRegionClient returns a new DERP-over-HTTP client. It connects lazily.
@@ -430,7 +497,7 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			tlsConfig = c.tlsConfig(nil)
 		}
 		c.logf("%s: connecting websocket to %v", caller, urlStr)
-		conn, err := dialWebsocketFunc(ctx, urlStr, tlsConfig, c.Header)
+		conn, err := dialWebsocketFunc(ctx, urlStr, tlsConfig, c.headers())
 		if err != nil {
 			c.logf("%s: websocket to %v error: %v", caller, urlStr, err)
 			return nil, 0, err
@@ -533,8 +600,8 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 	if err != nil {
 		return nil, 0, err
 	}
-	if c.Header != nil {
-		req.Header = c.Header.Clone()
+	if h := c.headers(); h != nil {
+		req.Header = h.Clone()
 	}
 	req.Header.Set("Upgrade", "DERP")
 	req.Header.Set("Connection", "Upgrade")
@@ -704,14 +771,34 @@ func (c *Client) DialRegion(ctx context.Context, reg *tailcfg.DERPRegion) (net.C
 }
 
 func (c *Client) tlsConfig(node *tailcfg.DERPNode) *tls.Config {
-	tlsConf := tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
-	if node != nil {
-		if node.InsecureForTests {
+	var tlsConf *tls.Config
+	if c.TLSConfigBypassesTLSDial && c.TLSConfig != nil {
+		// Caller has opted to bring their own server verification (custom
+		// CAs / mTLS / SPIFFE-style identity / non-publicly-trusted PKI).
+		// Use the supplied config as-is, only filling in ServerName when
+		// the caller didn't pin one. node.CertName (a tlsdial-specific
+		// domain-fronting hook) is intentionally not applied here; callers
+		// using bypass are expected to encode any cert-pinning in their
+		// own VerifyPeerCertificate / VerifyConnection.
+		tlsConf = c.TLSConfig.Clone()
+		if tlsConf.ServerName == "" {
+			tlsConf.ServerName = c.tlsServerName(node)
+		}
+		if node != nil && node.InsecureForTests {
 			tlsConf.InsecureSkipVerify = true
 			tlsConf.VerifyConnection = nil
+			tlsConf.VerifyPeerCertificate = nil
 		}
-		if node.CertName != "" {
-			tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
+	} else {
+		tlsConf = tlsdial.Config(c.tlsServerName(node), c.TLSConfig)
+		if node != nil {
+			if node.InsecureForTests {
+				tlsConf.InsecureSkipVerify = true
+				tlsConf.VerifyConnection = nil
+			}
+			if node.CertName != "" {
+				tlsdial.SetConfigExpectedCert(tlsConf, node.CertName)
+			}
 		}
 	}
 	tlsConf.NextProtos = []string{"http/1.1"}
@@ -903,7 +990,12 @@ func (c *Client) dialNodeUsingProxy(ctx context.Context, n *tailcfg.DERPNode, pr
 		}
 	}()
 
-	target := net.JoinHostPort(n.HostName, "443")
+	// Keep port selection in sync with dialNode.
+	port := "443"
+	if n.DERPPort != 0 {
+		port = fmt.Sprint(n.DERPPort)
+	}
+	target := net.JoinHostPort(n.HostName, port)
 
 	var authHeader string
 	if v, err := tshttpproxy.GetAuthHeader(pu); err != nil {
