@@ -47,7 +47,7 @@ type Config struct {
 }
 
 func (c *Config) serviceIP() netip.Addr {
-	return tsaddr.CoderServiceIPv6()
+	return tsaddr.LatticeServiceIPv6()
 }
 
 // WriteToBufioWriter write a debug version of c for logs to w, omitting

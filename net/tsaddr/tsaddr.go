@@ -43,8 +43,8 @@ var (
 	ulaEph6Range oncePrefix
 	serviceIPv6  oncePrefix
 
-	coderServiceIPv6 oncePrefix
-	coderV6Range     oncePrefix
+	latticeServiceIPv6 oncePrefix
+	latticeV6Range     oncePrefix
 )
 
 // TailscaleServiceIP returns the IPv4 listen address of services
@@ -64,15 +64,15 @@ func TailscaleServiceIPv6() netip.Addr {
 	return serviceIPv6.v.Addr()
 }
 
-func CoderServiceIPv6() netip.Addr {
-	coderServiceIPv6.Do(func() { mustPrefix(&coderServiceIPv6.v, CoderServiceIPv6String+"/128") })
-	return coderServiceIPv6.v.Addr()
+func LatticeServiceIPv6() netip.Addr {
+	latticeServiceIPv6.Do(func() { mustPrefix(&latticeServiceIPv6.v, LatticeServiceIPv6String+"/128") })
+	return latticeServiceIPv6.v.Addr()
 }
 
 const (
 	TailscaleServiceIPString   = "100.100.100.100"
 	TailscaleServiceIPv6String = "fd7a:115c:a1e0::53"
-	CoderServiceIPv6String     = "fd60:627a:a42b::53"
+	LatticeServiceIPv6String     = "fd60:627a:a42b::53"
 )
 
 // IsTailscaleIP reports whether ip is an IP address in a range that
@@ -84,9 +84,9 @@ func IsTailscaleIP(ip netip.Addr) bool {
 	return TailscaleULARange().Contains(ip)
 }
 
-// IsCoderIP reports whether ip is an IP address in the Coder IPv6 range.
-func IsCoderIP(ip netip.Addr) bool {
-	return CoderV6Range().Contains(ip)
+// IsLatticeIP reports whether ip is an IP address in the Lattice IPv6 range.
+func IsLatticeIP(ip netip.Addr) bool {
+	return LatticeV6Range().Contains(ip)
 }
 
 // TailscaleULARange returns the IPv6 Unique Local Address range that
@@ -96,9 +96,9 @@ func TailscaleULARange() netip.Prefix {
 	return tsUlaRange.v
 }
 
-func CoderV6Range() netip.Prefix {
-	coderV6Range.Do(func() { mustPrefix(&coderV6Range.v, "fd60:627a:a42b::/48") })
-	return coderV6Range.v
+func LatticeV6Range() netip.Prefix {
+	latticeV6Range.Do(func() { mustPrefix(&latticeV6Range.v, "fd60:627a:a42b::/48") })
+	return latticeV6Range.v
 }
 
 // TailscaleViaRange returns the IPv6 Unique Local Address subset range

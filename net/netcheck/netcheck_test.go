@@ -162,7 +162,7 @@ func TestHairpinWait(t *testing.T) {
 }
 
 func TestBasic(t *testing.T) {
-	t.Skip("this test doesn't work due to changes made by Coder")
+	t.Skip("this test doesn't work due to changes made by Lattice")
 
 	stunAddr, cleanup := stuntest.Serve(t)
 	defer cleanup()

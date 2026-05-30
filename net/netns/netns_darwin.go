@@ -107,11 +107,11 @@ func getInterfaceIndex(logf logger.Logf, netMon *netmon.Monitor, address string)
 		return defaultIdx()
 	}
 
-	// Verify that we didn't just choose the Coder interface;
+	// Verify that we didn't just choose the Lattice interface;
 	// if so, we fall back to binding from the default.
-	_, tsif, err2 := interfaces.Coder()
+	_, tsif, err2 := interfaces.Lattice()
 	if err2 == nil && tsif != nil && tsif.Index == idx {
-		logf("[unexpected] netns: interfaceIndexFor returned Coder interface")
+		logf("[unexpected] netns: interfaceIndexFor returned Lattice interface")
 		return defaultIdx()
 	}
 

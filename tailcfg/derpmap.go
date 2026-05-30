@@ -94,7 +94,7 @@ type DERPHomeParams struct {
 // connect to other regions as necessary to communicate with peers
 // advertising other regions as their homes.
 type DERPRegion struct {
-	// EmbeddedRelay is true when the region is bundled with the Coder
+	// EmbeddedRelay is true when the region is bundled with the Lattice
 	// control plane.
 	EmbeddedRelay bool
 

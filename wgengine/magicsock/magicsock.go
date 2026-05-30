@@ -2444,7 +2444,7 @@ func (c *Conn) bindSocket(ruc *RebindingUDPConn, network string, curPortFate cur
 			continue
 		}
 		trySetSocketBuffer(pconn, c.logf)
-		// CODER: https://github.com/coder/coder/issues/15523
+		// LATTICE: https://github.com/lattice/lattice/issues/15523
 		// Attempt to tell the OS not to fragment packets over this interface. We pad disco Ping and Pong packets to the
 		// size of the direct UDP packets that get sent for direct connections. Thus, any interfaces or paths that
 		// cannot fully support direct connections due to MTU limitations will not be selected. If no direct paths meet

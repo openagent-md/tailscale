@@ -4,7 +4,7 @@
 // Regression test for:
 //   - tailscale/tailscale#18112 (upstream)
 //   - tailscale/tailscale#18113 (upstream fix)
-//   - coder/coder#25380 (Coder-side impact)
+//   - lattice/lattice#25380 (Lattice-side impact)
 
 package wgengine
 

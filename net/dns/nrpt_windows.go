@@ -30,7 +30,7 @@ const (
 	// only a single rule. Now that we support multiple rules are required, we
 	// generate their GUIDs and store them under the Tailscale registry key.
 	//
-	// Coder: this value was changed to avoid messing with Tailscale.
+	// Lattice: this value was changed to avoid messing with Tailscale.
 	nrptSingleRuleID = `{09040707-2be9-491d-9d7b-62a454e774d2}`
 
 	// This is the name of the registry value we use to save Rule IDs under
@@ -78,7 +78,7 @@ func newNRPTRuleDatabase(logf logger.Logf) *nrptRuleDatabase {
 	ret.detectWriteAsGP()
 	ret.watchForGPChanges()
 	// Track existing NRPT rules as stale rather than deleting them
-	// immediately. This preserves DNS routing for .coder queries
+	// immediately. This preserves DNS routing for .lattice queries
 	// during the gap between engine startup and the first successful
 	// DNS configuration. Stale rules are cleaned up in the first
 	// call to WriteSplitDNSConfig, after replacement rules are

@@ -26,7 +26,7 @@ import (
 	"tailscale.com/types/logger"
 )
 
-const firewallRulePrefix = "CoderConnect-"
+const firewallRulePrefix = "LatticeConnect-"
 
 var (
 	firewallRuleIn      = firewallRulePrefix + "In"

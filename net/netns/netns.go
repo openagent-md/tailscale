@@ -55,14 +55,14 @@ func SetDisableBindConnToInterface(v bool) {
 	disableBindConnToInterface.Store(v)
 }
 
-var coderSoftIsolation atomic.Bool
+var latticeSoftIsolation atomic.Bool
 
-// SetCoderSoftIsolation enables or disables Coder's soft-isolation
+// SetLatticeSoftIsolation enables or disables Lattice's soft-isolation
 // functionality. All other network isolation settings are ignored when this is
 // set.
 //
-// Soft isolation is a workaround for allowing Coder Connect to function with
-// corporate VPNs. Without this, Coder Connect cannot connect to Coder
+// Soft isolation is a workaround for allowing Lattice Connect to function with
+// corporate VPNs. Without this, Lattice Connect cannot connect to Lattice
 // deployments behind corporate VPNs.
 //
 // Soft isolation does the following:
@@ -78,14 +78,14 @@ var coderSoftIsolation atomic.Bool
 // magicsock.
 //
 // Enabling this has the risk of potential network loops, as sockets could race
-// changes to the OS routing table or interface list. Coder doesn't provide
+// changes to the OS routing table or interface list. Lattice doesn't provide
 // functionality similar to Tailscale's Exit Nodes, so we don't expect loops
 // to occur in our use case.
 //
 // This currently only has an effect on Windows and macOS, and is only used by
-// Coder Connect.
-func SetCoderSoftIsolation(v bool) {
-	coderSoftIsolation.Store(v)
+// Lattice Connect.
+func SetLatticeSoftIsolation(v bool) {
+	latticeSoftIsolation.Store(v)
 }
 
 // Listener returns a new net.Listener with its Control hook func
@@ -171,10 +171,10 @@ func shouldBindToDefaultInterface(logf logger.Logf, address string) bool {
 		return false
 	}
 
-	if coderSoftIsolation.Load() {
+	if latticeSoftIsolation.Load() {
 		addr, err := getAddr(address)
 		if err != nil {
-			logf("[unexpected] netns: Coder soft isolation: error getting addr for %q, binding to default: %v", address, err)
+			logf("[unexpected] netns: Lattice soft isolation: error getting addr for %q, binding to default: %v", address, err)
 			return true
 		}
 		if !addr.IsValid() || addr.IsUnspecified() {
@@ -182,8 +182,8 @@ func shouldBindToDefaultInterface(logf logger.Logf, address string) bool {
 			// interface.
 			return false
 		}
-		if tsaddr.IsCoderIP(addr) {
-			logf("[unexpected] netns: Coder soft isolation: detected socket destined for Coder interface, binding to default")
+		if tsaddr.IsLatticeIP(addr) {
+			logf("[unexpected] netns: Lattice soft isolation: detected socket destined for Lattice interface, binding to default")
 			return true
 		}
 

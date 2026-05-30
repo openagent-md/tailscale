@@ -24,16 +24,16 @@ import (
 // which HTTP proxy the system should use.
 var LoginEndpointForProxyDetermination = "https://controlplane.tailscale.com/"
 
-// Coder returns the current machine's Coder interface, if any.
+// Lattice returns the current machine's Lattice interface, if any.
 // If none is found, all zero values are returned.
 // A non-nil error is only returned on a problem listing the system interfaces.
-func Coder() ([]netip.Addr, *net.Interface, error) {
+func Lattice() ([]netip.Addr, *net.Interface, error) {
 	ifs, err := netInterfaces()
 	if err != nil {
 		return nil, nil, err
 	}
 	for _, iface := range ifs {
-		if !maybeCoderInterfaceName(iface.Name) {
+		if !maybeLatticeInterfaceName(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -45,7 +45,7 @@ func Coder() ([]netip.Addr, *net.Interface, error) {
 			if ipnet, ok := a.(*net.IPNet); ok {
 				nip, ok := netip.AddrFromSlice(ipnet.IP)
 				nip = nip.Unmap()
-				if ok && tsaddr.IsCoderIP(nip) {
+				if ok && tsaddr.IsLatticeIP(nip) {
 					tsIPs = append(tsIPs, nip)
 				}
 			}
@@ -57,11 +57,11 @@ func Coder() ([]netip.Addr, *net.Interface, error) {
 	return nil, nil, nil
 }
 
-// maybeCoderInterfaceName reports whether s is an interface
-// name that might be used by Coder.
-func maybeCoderInterfaceName(s string) bool {
-	return s == "Coder" ||
-		strings.HasPrefix(s, "coder") ||
+// maybeLatticeInterfaceName reports whether s is an interface
+// name that might be used by Lattice.
+func maybeLatticeInterfaceName(s string) bool {
+	return s == "Lattice" ||
+		strings.HasPrefix(s, "lattice") ||
 		strings.HasPrefix(s, "utun")
 }
 
@@ -118,7 +118,7 @@ func LocalAddresses() (regular, loopback []netip.Addr, err error) {
 				// very well be something we can route to
 				// directly, because both nodes are
 				// behind the same CGNAT router.
-				if tsaddr.IsCoderIP(ip) {
+				if tsaddr.IsLatticeIP(ip) {
 					continue
 				}
 				if ip.IsLoopback() || ifcIsLoopback {
@@ -477,7 +477,7 @@ func (s *State) AnyInterfaceUp() bool {
 
 func hasTailscaleIP(pfxs []netip.Prefix) bool {
 	for _, pfx := range pfxs {
-		if tsaddr.IsCoderIP(pfx.Addr()) {
+		if tsaddr.IsLatticeIP(pfx.Addr()) {
 			return true
 		}
 	}
@@ -494,8 +494,8 @@ func isTailscaleInterface(name string, ips []netip.Prefix) bool {
 		// macOS NetworkExtensions and utun devices.
 		return true
 	}
-	return name == "Coder" || // as it is on Windows
-		strings.HasPrefix(name, "coder") // TODO: use --tun flag value, etc; see TODO in method doc
+	return name == "Lattice" || // as it is on Windows
+		strings.HasPrefix(name, "lattice") // TODO: use --tun flag value, etc; see TODO in method doc
 }
 
 // getPAC, if non-nil, returns the current PAC file URL.

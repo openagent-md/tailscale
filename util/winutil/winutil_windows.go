@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	regBase       = `SOFTWARE\Coder VPN`
-	regPolicyBase = `SOFTWARE\Policies\Coder`
+	regBase       = `SOFTWARE\Lattice VPN`
+	regPolicyBase = `SOFTWARE\Policies\Lattice`
 )
 
 // ErrNoShell is returned when the shell process is not found.

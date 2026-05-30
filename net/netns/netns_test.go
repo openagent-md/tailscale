@@ -102,10 +102,10 @@ func TestShouldBindToDefaultInterface(t *testing.T) {
 		}
 	})
 
-	t.Run("CoderSoftIsolation", func(t *testing.T) {
-		SetCoderSoftIsolation(true)
+	t.Run("LatticeSoftIsolation", func(t *testing.T) {
+		SetLatticeSoftIsolation(true)
 		t.Cleanup(func() {
-			SetCoderSoftIsolation(false)
+			SetLatticeSoftIsolation(false)
 		})
 
 		tests := []struct {
@@ -130,11 +130,11 @@ func TestShouldBindToDefaultInterface(t *testing.T) {
 			{"[::%eth0]:1234", true}, // zones are not supported
 			{"a:1234", true},         // not an IP
 
-			// Coder IPs should bind to default.
-			{fmt.Sprintf("[%s]:8080", tsaddr.CoderServiceIPv6()), true},
-			{fmt.Sprintf("[%s]:8080", tsaddr.CoderV6Range().Addr().Next()), true},
+			// Lattice IPs should bind to default.
+			{fmt.Sprintf("[%s]:8080", tsaddr.LatticeServiceIPv6()), true},
+			{fmt.Sprintf("[%s]:8080", tsaddr.LatticeV6Range().Addr().Next()), true},
 
-			// Non-Coder IPs should not bind to default.
+			// Non-Lattice IPs should not bind to default.
 			{fmt.Sprintf("[%s]:8080", tsaddr.TailscaleServiceIPv6()), false},
 			{fmt.Sprintf("%s:8080", tsaddr.TailscaleServiceIP()), false},
 			{"1.2.3.4:8080", false},

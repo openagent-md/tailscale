@@ -435,7 +435,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 	had4 := len(last.RegionV4Latency) > 0
 	had6 := len(last.RegionV6Latency) > 0
 	hadBoth := have6if && had4 && had6
-	// Coder: Some regions don't have STUN, so we need to make sure we have probed
+	// Lattice: Some regions don't have STUN, so we need to make sure we have probed
 	// enough STUN regions
 	numSTUN := 0
 	for _, reg := range sortRegions(dm, last) {
@@ -481,7 +481,7 @@ func makeProbePlan(dm *tailcfg.DERPMap, ifState *interfaces.State, last *Report)
 				do6 = false
 			}
 			n := reg.Nodes[try%len(reg.Nodes)]
-			// Coder: The probe won't be valid if the node doesn't have a STUNPort.
+			// Lattice: The probe won't be valid if the node doesn't have a STUNPort.
 			if n.STUNPort < 0 {
 				continue
 			}
@@ -737,7 +737,7 @@ func (rs *reportState) addNodeLatency(node *tailcfg.DERPNode, ipp netip.AddrPort
 
 	ret.UDP = true
 
-	// Coder: don't actually store the latency.
+	// Lattice: don't actually store the latency.
 	//updateLatency(ret.RegionLatency, node.RegionID, d)
 
 	// Once we've heard from enough regions (3), start a timer to
@@ -1045,7 +1045,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	}
 
 	// Never perform the captive portal check. We don't use
-	// this in Coder, so it just adds time to the initial connect.
+	// this in Lattice, so it just adds time to the initial connect.
 	captivePortalStop()
 
 	wg := syncs.NewWaitGroupChan()
@@ -1100,7 +1100,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 	// Try HTTPS and ICMP latency check if all STUN probes failed due to
 	// UDP presumably being blocked.
 	// TODO: this should be moved into the probePlan, using probeProto probeHTTPS.
-	// Coder: always run this because we don't store STUN latency in the report.
+	// Lattice: always run this because we don't store STUN latency in the report.
 	//if !rs.anyUDP() && ctx.Err() == nil {
 	if ctx.Err() == nil {
 		var wg sync.WaitGroup
@@ -1125,7 +1125,7 @@ func (c *Client) GetReport(ctx context.Context, dm *tailcfg.DERPMap) (_ *Report,
 			}()
 
 			wg.Add(len(need))
-			// Coder: this is misleading because we always log it.
+			// Lattice: this is misleading because we always log it.
 			//c.logf("netcheck: UDP is blocked, trying HTTPS")
 		}
 		for _, reg := range need {
@@ -1445,7 +1445,7 @@ func (c *Client) measureAllICMPLatency(ctx context.Context, rs *reportState, nee
 	p := ping.New(ctx, c.logf, netns.Listener(c.logf, c.NetMon))
 	defer p.Close()
 
-	// Coder: this is misleading because we always try ICMP and DERP.
+	// Lattice: this is misleading because we always try ICMP and DERP.
 	//c.logf("UDP is blocked, trying ICMP")
 
 	var wg sync.WaitGroup
@@ -1628,7 +1628,7 @@ func (c *Client) addReportHistoryAndSetPreferredDERP(r *Report, dm tailcfg.DERPM
 		oldRegionCurLatency time.Duration // latency of old PreferredDERP
 	)
 	for regionID, d := range r.RegionLatency {
-		// Coder: if the region only has STUNOnly nodes then it must not be
+		// Lattice: if the region only has STUNOnly nodes then it must not be
 		// selected as the preferred DERP region.
 		if dm.Regions().Has(regionID) && !regionHasDERPNode(dm.Regions().Get(regionID).AsStruct()) {
 			continue
@@ -1720,7 +1720,7 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 		return
 	}
 
-	// Coder: The address below won't be valid if the node doesn't have a
+	// Lattice: The address below won't be valid if the node doesn't have a
 	// STUNPort.
 	if node.STUNPort < 0 {
 		return
@@ -1739,8 +1739,8 @@ func (rs *reportState) runProbe(ctx context.Context, dm *tailcfg.DERPMap, probe 
 
 	rs.mu.Lock()
 	rs.inFlight[txID] = func(ipp netip.AddrPort) {
-		// Coder: we don't want to store the latency of STUN netchecks because
-		// Coder doesn't contain a built-in STUN server and customers often use
+		// Lattice: we don't want to store the latency of STUN netchecks because
+		// Lattice doesn't contain a built-in STUN server and customers often use
 		// Google STUN which has extremely low latency everywhere on the planet.
 		// This means that latency checks to any regions containing the Google
 		// STUN server will always muddy that region's latency results.

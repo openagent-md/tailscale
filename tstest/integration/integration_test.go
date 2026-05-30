@@ -507,7 +507,7 @@ func TestOneNodeUpWindowsStyle(t *testing.T) {
 // TestNATPing creates two nodes, n1 and n2, sets up masquerades for both and
 // tries to do bi-directional pings between them.
 func TestNATPing(t *testing.T) {
-	t.Skip("Coder: The fake control server does not work after Coder's address changes")
+	t.Skip("Lattice: The fake control server does not work after Lattice's address changes")
 
 	t.Parallel()
 	env := newTestEnv(t)

@@ -185,7 +185,7 @@ func TestShouldHandlePing(t *testing.T) {
 		}
 	})
 
-	t.Run("ICMP6-coder-addr", func(t *testing.T) {
+	t.Run("ICMP6-lattice-addr", func(t *testing.T) {
 		dst := netip.MustParseAddr("fd60:627a:a42b::1")
 		icmph := packet.ICMP6Header{
 			IP6Header: packet.IP6Header{

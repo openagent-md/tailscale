@@ -110,11 +110,11 @@ func setTailscaleHosts(prevHostsFile []byte, hosts []*HostEntry) ([]byte, error)
 	b := bytes.ReplaceAll(prevHostsFile, []byte("\r\n"), []byte("\n"))
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	const (
-		header = "# CoderHostsSectionStart"
-		footer = "# CoderHostsSectionEnd"
+		header = "# LatticeHostsSectionStart"
+		footer = "# LatticeHostsSectionEnd"
 	)
 	var comments = []string{
-		"# This section contains DNS entries for Coder workspaces.",
+		"# This section contains DNS entries for Lattice workspaces.",
 		"# Do not edit this section manually.",
 	}
 	var out bytes.Buffer

@@ -598,14 +598,14 @@ func TestManager(t *testing.T) {
 			},
 		},
 		{
-			name: "coder",
+			name: "lattice",
 			in: Config{
 				OnlyIPv6: true,
 				Routes: map[dnsname.FQDN][]*dnstype.Resolver{
-					"coder.": nil,
+					"lattice.": nil,
 				},
 				Hosts: hosts(
-					"agent.myws.me.coder.", "fd60:627a:a42c::53",
+					"agent.myws.me.lattice.", "fd60:627a:a42c::53",
 				),
 			},
 			os: OSConfig{
@@ -616,9 +616,9 @@ func TestManager(t *testing.T) {
 					".", "",
 				),
 				Hosts: hosts(
-					"agent.myws.me.coder.", "fd60:627a:a42c::53",
+					"agent.myws.me.lattice.", "fd60:627a:a42c::53",
 				),
-				LocalDomains: fqdns("coder."),
+				LocalDomains: fqdns("lattice."),
 			},
 		},
 	}

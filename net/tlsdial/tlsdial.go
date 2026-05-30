@@ -51,7 +51,7 @@ func Config(host string, base *tls.Config) *tls.Config {
 	} else {
 		conf = base.Clone()
 	}
-	// Coder replicas will dial internal IP addresses rather
+	// Lattice replicas will dial internal IP addresses rather
 	// than the access URL to mesh DERP connections.
 	if conf.ServerName != "" {
 		host = conf.ServerName

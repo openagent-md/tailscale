@@ -56,7 +56,7 @@ const debugPackets = false
 
 var debugNetstack = envknob.RegisterBool("TS_DEBUG_NETSTACK")
 
-var coderDNSIPv6 = tsaddr.CoderServiceIPv6()
+var latticeDNSIPv6 = tsaddr.LatticeServiceIPv6()
 
 func init() {
 	mode := envknob.String("TS_DEBUG_NETSTACK_LEAK_MODE")
@@ -173,7 +173,7 @@ const (
 	// has a minimum of 200ms and maximum of 120s, and grows exponentially when the other side is
 	// unresponsive. The default maxRetries in gVisor is 15, which means in practice over ten
 	// minutes of unresponsiveness before we time out.  Setting to 5 should time out in 15-30s,
-	// depending on the latency of the connection.  In Coder's system we depend on Wireguard as the
+	// depending on the latency of the connection.  In Lattice's system we depend on Wireguard as the
 	// underlay, which retries handshakes on a 5s timer, so we don't want to shorten the timeout
 	// less than 15s or so, to give us several chances to re-establish a Wireguard session after
 	// idling.
@@ -461,7 +461,7 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper) filter.Re
 
 	// If it's not traffic to the service IP (i.e. magicDNS) we don't
 	// care; resume processing.
-	if dst := p.Dst.Addr(); dst != coderDNSIPv6 {
+	if dst := p.Dst.Addr(); dst != latticeDNSIPv6 {
 		return filter.Accept
 	}
 	// Of traffic to the service IP, we only care about UDP 53, and TCP
@@ -563,7 +563,7 @@ func (ns *Impl) inject() {
 		//            the IP src/dest even if its missing the rest of the pkt.
 		//            That way we dont have to do this twitchy-af byte-yeeting.
 		if b := pkt.NetworkHeader().Slice(); len(b) >= 40 && (b[0]>>4) == 6 { // min ipv6 header && ip proto field
-			if srcIP, ok := netip.AddrFromSlice(net.IP(b[8:24])); ok && coderDNSIPv6 == srcIP {
+			if srcIP, ok := netip.AddrFromSlice(net.IP(b[8:24])); ok && latticeDNSIPv6 == srcIP {
 				sendToHost = true
 			}
 		}
@@ -830,7 +830,7 @@ func (ns *Impl) shouldHandlePing(p *packet.Parsed) (_ netip.Addr, ok bool) {
 
 	// For non-4via6 addresses, we don't handle pings if they're destined
 	// for a Tailscale IP.
-	if tsaddr.IsCoderIP(destIP) {
+	if tsaddr.IsLatticeIP(destIP) {
 		return netip.Addr{}, false
 	}
 
@@ -927,7 +927,7 @@ func (ns *Impl) acceptTCP(r *tcp.ForwarderRequest) {
 	}
 
 	// DNS
-	if reqDetails.LocalPort == 53 && dialIP == coderDNSIPv6 {
+	if reqDetails.LocalPort == 53 && dialIP == latticeDNSIPv6 {
 		c := getConnOrReset()
 		if c == nil {
 			return
@@ -1004,13 +1004,13 @@ func (ns *Impl) forwardTCP(getClient func(...tcpip.SettableSocketOption) *gonet.
 	var stdDialer net.Dialer
 	server, err := stdDialer.DialContext(ctx, "tcp", dialAddrStr)
 	if err != nil {
-		// Coder: Retry with loopback IPv6 if the dial was for 127.0.0.1.
+		// Lattice: Retry with loopback IPv6 if the dial was for 127.0.0.1.
 		if dialAddr.Addr().Is4() && dialAddr.Addr().String() == "127.0.0.1" {
 			ipv6DialAddr := netip.AddrPortFrom(netip.IPv6Loopback(), dialAddr.Port())
 			server, err = stdDialer.DialContext(ctx, "tcp", ipv6DialAddr.String())
 			if err == nil {
 				if debugNetstack() {
-					ns.logf("[coder] netstack: successful IPv4 loopback => IPv6 loopback redirect: original = %s, new = %s", dialAddrStr, ipv6DialAddr.String())
+					ns.logf("[lattice] netstack: successful IPv4 loopback => IPv6 loopback redirect: original = %s, new = %s", dialAddrStr, ipv6DialAddr.String())
 				}
 				dialAddr = ipv6DialAddr
 				dialAddrStr = ipv6DialAddr.String()
@@ -1082,7 +1082,7 @@ func (ns *Impl) acceptUDP(r *udp.ForwarderRequest) {
 	}
 
 	// Handle magicDNS traffic (via UDP) here.
-	if dst := dstAddr.Addr(); dst == coderDNSIPv6 {
+	if dst := dstAddr.Addr(); dst == latticeDNSIPv6 {
 		if dstAddr.Port() != 53 {
 			ep.Close()
 			return // Only MagicDNS traffic runs on the service IPs for now.

@@ -45,8 +45,8 @@ const dnsSymbolicFQDN = "magicdns.localhost-tailscale-daemon."
 const maxResponseBytes = 4095
 
 // defaultTTL is the TTL of all responses from Resolver.
-// Coder: We've changed this from 10 minutes to 2 seconds, as we'd like to use
-// the existence of Coder Connect DNS records to determine whether Coder Connect
+// Lattice: We've changed this from 10 minutes to 2 seconds, as we'd like to use
+// the existence of Lattice Connect DNS records to determine whether Lattice Connect
 // is running.
 const defaultTTL = 2 * time.Second
 

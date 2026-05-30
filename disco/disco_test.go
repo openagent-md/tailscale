@@ -76,7 +76,7 @@ func TestMarshalAndParse(t *testing.T) {
 			if !ok {
 				t.Fatalf("didn't start with foo: got %q", got)
 			}
-			// CODER: 1310 is max size of a Wireguard packet we will send.
+			// LATTICE: 1310 is max size of a Wireguard packet we will send.
 			expectedLen := 1310 - len(Magic) - keyLen - NonceLen - box.Overhead
 			switch tt.m.(type) {
 			case *Ping:

@@ -2287,7 +2287,7 @@ func TestIsWireGuardOnlyPeer(t *testing.T) {
 }
 
 func TestIsWireGuardOnlyPeerWithMasquerade(t *testing.T) {
-	t.Skip("Coder: We do not support wireguard only peers, and this test fails because we currently only support IPv6 addresses for TS IPs")
+	t.Skip("Lattice: We do not support wireguard only peers, and this test fails because we currently only support IPv6 addresses for TS IPs")
 
 	derpMap, cleanup := runDERPAndStun(t, t.Logf, localhostListener{}, netaddr.IPv4(127, 0, 0, 1))
 	defer cleanup()

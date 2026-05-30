@@ -714,7 +714,7 @@ func (c *Client) Probe(ctx context.Context) (res ProbeResult, err error) {
 		return res, err
 	}
 	defer uc.Close()
-	// Coder needs to optimize for low initial connection times, so
+	// Lattice needs to optimize for low initial connection times, so
 	// punching the correct hole immediately isn't required.
 	ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
